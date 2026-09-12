@@ -1,0 +1,64 @@
+package com.zosh.zosh.pos.system.config;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import javax.sql.DataSource;
+
+/**
+ * Builds the DataSource with explicit connection resilience settings.
+ * This matters for this app specifically because the MySQL database (Railway)
+ * and the app server (Render) run on different cloud providers, so the
+ * connection is more prone to slow handshakes or transient network blips
+ * than a same-provider setup would be.
+ */
+@Configuration
+public class DataSourceConfig {
+
+    @Value("${MYSQLHOST:localhost}")
+    private String dbHost;
+
+    @Value("${MYSQLPORT:3306}")
+    private String dbPort;
+
+    @Value("${MYSQLDATABASE:pos_bhumi}")
+    private String dbName;
+
+    @Value("${MYSQLUSER:root}")
+    private String dbUser;
+
+    @Value("${MYSQLPASSWORD:}")
+    private String dbPassword;
+
+    @Bean
+    public DataSource dataSource() {
+        String jdbcUrl = String.format(
+                "jdbc:mysql://%s:%s/%s?useSSL=false&allowPublicKeyRetrieval=true"
+                        + "&connectTimeout=15000&socketTimeout=30000",
+                dbHost, dbPort, dbName
+        );
+
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(jdbcUrl);
+        config.setUsername(dbUser);
+        config.setPassword(dbPassword);
+        config.setDriverClassName("com.mysql.cj.jdbc.Driver");
+
+        // Don't let a slow/unreachable DB take down the whole connection attempt instantly.
+        config.setConnectionTimeout(20000); // 20s to establish a connection
+        config.setValidationTimeout(5000);
+
+        // If the DB is briefly unreachable at boot (e.g. cross-cloud network blip),
+        // don't crash the whole app on startup — keep retrying in the background instead.
+        config.setInitializationFailTimeout(-1);
+
+        // Reasonable pool sizing for a small free-tier instance.
+        config.setMaximumPoolSize(5);
+        config.setMinimumIdle(1);
+
+        return new HikariDataSource(config);
+    }
+}
