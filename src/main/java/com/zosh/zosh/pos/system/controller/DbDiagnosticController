@@ -1,0 +1,71 @@
+package com.zosh.zosh.pos.system.controller;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.sql.Connection;
+import java.sql.DriverManager;
+
+/**
+ * TEMPORARY diagnostic endpoint - remove once the DB connectivity issue is resolved.
+ * Tests raw TCP + JDBC connectivity independent of Hibernate/JPA, so we can tell
+ * whether Render's environment can reach Railway's MySQL proxy at all, without
+ * needing Shell access (not available on Render's free plan).
+ */
+@RestController
+public class DbDiagnosticController {
+
+    @Value("${MYSQLHOST:localhost}")
+    private String dbHost;
+
+    @Value("${MYSQLPORT:3306}")
+    private String dbPort;
+
+    @Value("${MYSQLDATABASE:pos_bhumi}")
+    private String dbName;
+
+    @Value("${MYSQLUSER:root}")
+    private String dbUser;
+
+    @Value("${MYSQLPASSWORD:}")
+    private String dbPassword;
+
+    @GetMapping("/debug/db-check")
+    public String checkDb() {
+        StringBuilder result = new StringBuilder();
+        result.append("Target: ").append(dbHost).append(":").append(dbPort).append("\n\n");
+
+        // Step 1: raw TCP socket test (no MySQL protocol involved at all)
+        result.append("--- Step 1: Raw TCP socket test ---\n");
+        try (Socket socket = new Socket()) {
+            long start = System.currentTimeMillis();
+            socket.connect(new InetSocketAddress(dbHost, Integer.parseInt(dbPort)), 10000);
+            long elapsed = System.currentTimeMillis() - start;
+            result.append("SUCCESS: TCP socket connected in ").append(elapsed).append("ms\n\n");
+        } catch (Exception e) {
+            result.append("FAILED: ").append(e.getClass().getName())
+                    .append(" - ").append(e.getMessage()).append("\n\n");
+            result.append("(If this fails, it's a pure network/firewall issue - Render cannot reach this host:port at all.)\n");
+            return result.toString();
+        }
+
+        // Step 2: actual JDBC connection (MySQL protocol handshake)
+        result.append("--- Step 2: JDBC connection test ---\n");
+        String url = "jdbc:mysql://" + dbHost + ":" + dbPort + "/" + dbName
+                + "?connectTimeout=10000&socketTimeout=10000";
+        try (Connection conn = DriverManager.getConnection(url, dbUser, dbPassword)) {
+            result.append("SUCCESS: JDBC connected. DB product: ")
+                    .append(conn.getMetaData().getDatabaseProductName())
+                    .append(" ").append(conn.getMetaData().getDatabaseProductVersion());
+        } catch (Exception e) {
+            result.append("FAILED: ").append(e.getClass().getName())
+                    .append(" - ").append(e.getMessage()).append("\n");
+            result.append("(TCP connected fine, but the MySQL handshake itself failed - likely a proxy-level or protocol issue, not a firewall block.)\n");
+        }
+
+        return result.toString();
+    }
+}
